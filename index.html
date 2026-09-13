@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Ojol Smart Nav Web Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: #121212;
+            color: white;
+        }
+
+        #map {
+            height: 50vh;
+            width: 100%;
+        }
+
+        .panel {
+            padding: 15px;
+            height: 50vh;
+            box-sizing: border-box;
+            background: #1e1e1e;
+            overflow-y: auto;
+        }
+
+        input {
+            width: 65%;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: white;
+            font-size: 14px;
+        }
+
+        button {
+            padding: 12px 18px;
+            border-radius: 6px;
+            border: none;
+            background: #008CBA;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .status-box {
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-size: 13px;
+            border-left: 4px solid #008CBA;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map"></div>
+
+    <div class="panel">
+        <button id="btnConnect" style="width: 100%;">HUBUNGKAN KE STANG MOTOR</button>
+        <div class="status-box" id="lblStatus">Status Bluetooth: Terputus</div>
+
+        <div style="margin-top: 15px; display: flex; justify-content: space-between;">
+            <input type="text" id="txtSearch" placeholder="Ketik alamat / nama tempat..." />
+            <button onclick="searchLocation()">CARI</button>
+        </div>
+
+        <div class="status-box" id="lblNavInfo">Status Navigasi: Belum Ada Tujuan</div>
+    </div>
+
+    <script>
+        let map, routingControl;
+        let userMarker = null;
+        let currentLat = -6.200000, currentLon = 106.816666;
+        let navChar = null, cmdChar = null;
+
+        const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+        const CHAR_NAV_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
+        const CHAR_CMD_UUID = "19b10002-e8f2-537e-4f6c-d104768a1214";
+
+        // Init Peta Leaflet
+        map = L.map('map').setView([currentLat, currentLon], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+
+        // Auto Position Tracking GPS HP
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition((pos) => {
+                currentLat = pos.coords.latitude;
+                currentLon = pos.coords.longitude;
+
+                if (!userMarker) {
+                    userMarker = L.marker([currentLat, currentLon]).addTo(map).bindPopup("Posisi Anda").openPopup();
+                    map.setView([currentLat, currentLon], 16);
+                } else {
+                    userMarker.setLatLng([currentLat, currentLon]);
+                }
+            }, (err) => console.log(err), {enableHighAccuracy: true});
+        }
+
+        // Web Bluetooth Connect
+        document.getElementById('btnConnect').addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{name: 'Ojol-Nav-C3'}],
+                    optionalServices: [SERVICE_UUID]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+
+                navChar = await service.getCharacteristic(CHAR_NAV_UUID);
+                cmdChar = await service.getCharacteristic(CHAR_CMD_UUID);
+
+                await cmdChar.startNotifications();
+                cmdChar.addEventListener('characteristicvaluechanged', (evt) => {
+                    const val = new TextDecoder().decode(evt.target.value);
+                    if (val.includes("ALT_ROUTE")) {
+                        alert("Tombol ALT di stang ditekan! Memperbarui rute...");
+                    }
+                });
+
+                document.getElementById('lblStatus').innerText = "Status Bluetooth: Terhubung ke ESP32!";
+                document.getElementById('lblStatus').style.borderLeftColor = "#4CAF50";
+            } catch (err) {
+                document.getElementById('lblStatus').innerText = "Gagal Konek: " + err;
+            }
+        });
+
+        // Search OpenStreetMap Nominatim API
+        async function searchLocation() {
+            const q = document.getElementById('txtSearch').value;
+            if (!q) return;
+
+            document.getElementById('lblNavInfo').innerText = "Mencari lokasi...";
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+            const data = await res.json();
+
+            if (data.length > 0) {
+                calculateRoute(parseFloat(data[0].lat), parseFloat(data[0].lon));
+            } else {
+                alert("Lokasi tidak ditemukan!");
+            }
+        }
+
+        // Calculate Route via OSRM & Send to BLE
+        function calculateRoute(destLat, destLon) {
+            if (routingControl) map.removeControl(routingControl);
+
+            routingControl = L.Routing.control({
+                waypoints: [L.latLng(currentLat, currentLon), L.latLng(destLat, destLon)],
+                router: L.Routing.osrmv1({serviceUrl: 'https://router.project-osrm.org/route/v1'}),
+                show: false
+            }).addTo(map);
+
+            routingControl.on('routesfound', (e) => {
+                const route = e.routes[0];
+                const instructions = route.instructions[0];
+
+                document.getElementById('lblNavInfo').innerText =
+                    `Instruksi: ${instructions.text} (${Math.round(instructions.distance)}m)`;
+
+                const pts = route.coordinates.slice(0, 10).map((c) => {
+                    return [Math.round((c.lng - currentLon) * 10000), Math.round((c.lat - currentLat) * 10000)];
+                });
+
+                if (navChar) {
+                    const payload = {
+                        speed: 35,
+                        turn: instructions.type.includes("Right") ? "RIGHT" : (instructions.type.includes("Left") ? "LEFT" : "STRAIGHT"),
+                        dist: Math.round(instructions.distance),
+                        street: instructions.road || "Jl. Tujuan",
+                        pts: pts
+                    };
+
+                    const data = new TextEncoder().encode(JSON.stringify(payload));
+                    navChar.writeValueWithoutResponse(data);
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>
