@@ -43,12 +43,12 @@
   </div>
   
   <div class="input-group">
-    <input type="text" id="txtSearch" placeholder="Ketik tujuan (misal: Mall Cipinang)..." />
+    <input type="text" id="txtSearch" placeholder="Ketik tujuan atau klik langsung di peta..." />
     <button class="btn" onclick="searchLocation()">CARI</button>
   </div>
   
   <div class="status-box" id="lblNavInfo">
-    <strong>Navigasi:</strong> Belum ada rute aktif.
+    <strong>Navigasi:</strong> Ketuk (klik) salah satu titik di peta untuk mulai navigasi.
   </div>
 
   <div class="log-box" id="logBox">> Web App Siap. Silakan hubungkan Bluetooth...</div>
@@ -57,9 +57,15 @@
 <script>
   let map, routingControl;
   let userMarker = null;
+  let destinationMarker = null;
   let currentLat = -6.200000, currentLon = 106.816666;
+  let targetLat = null, targetLon = null;
   let bluetoothDevice = null;
   let navChar = null, cmdChar = null;
+
+  // Variabel untuk Auto-Rerouting (Deteksi Salah Arah)
+  let lastRerouteTime = 0;
+  const REROUTE_COOLDOWN_MS = 8000; // Minimal jeda 8 detik antar kalkulasi ulang rute
 
   const SERVICE_UUID  = "19b10000-e8f2-537e-4f6c-d104768a1214";
   const CHAR_NAV_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
@@ -75,11 +81,42 @@
   map = L.map('map').setView([currentLat, currentLon], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-  // Auto Tracking GPS HP
+  // 2. Fitur Klik Peta untuk Menentukan Tujuan Secara Instan (Tap-to-Destination)
+  map.on('click', function(e) {
+    targetLat = e.latlng.lat;
+    targetLon = e.latlng.lng;
+
+    log("Tujuan dipilih via klik peta.");
+
+    if (destinationMarker) {
+      map.removeLayer(destinationMarker);
+    }
+
+    destinationMarker = L.marker([targetLat, targetLon], { draggable: true }).addTo(map)
+      .bindPopup("Titik Tujuan Dipilih").openPopup();
+
+    // Event jika marker tujuan digeser manual oleh pengguna
+    destinationMarker.on('dragend', function(event) {
+      const position = destinationMarker.getLatLng();
+      targetLat = position.lat;
+      targetLon = position.lng;
+      calculateRoute(targetLat, targetLon);
+    });
+
+    calculateRoute(targetLat, targetLon);
+  });
+
+  // 3. Auto Tracking GPS HP & Deteksi Salah Arah (Auto-Rerouting)
   if ("geolocation" in navigator) {
     navigator.geolocation.watchPosition((pos) => {
-      currentLat = pos.coords.latitude;
-      currentLon = pos.coords.longitude;
+      const newLat = pos.coords.latitude;
+      const newLon = pos.coords.longitude;
+      
+      // Hitung jarak pergeseran posisi GPS saat ini (dalam meter kasar)
+      const distanceMoved = calculateDistanceMeters(currentLat, currentLon, newLat, newLon);
+
+      currentLat = newLat;
+      currentLon = newLon;
       
       if (!userMarker) {
         userMarker = L.marker([currentLat, currentLon]).addTo(map).bindPopup("Posisi Anda").openPopup();
@@ -87,12 +124,36 @@
       } else {
         userMarker.setLatLng([currentLat, currentLon]);
       }
-    }, (err) => log("GPS Error: " + err.message), { enableHighAccuracy: true });
+
+      // AUTO-REROUTING: Jika tujuan sudah diset DAN pengguna bergeser cukup jauh (> 25 meter) 
+      // tetapi tidak sesuai jalur / salah arah, otomatis buat rute baru dari posisi sekarang!
+      if (targetLat && targetLon && distanceMoved > 25) {
+        const now = Date.now();
+        if (now - lastRerouteTime > REROUTE_COOLDOWN_MS) {
+          log("Mendeteksi pergeseran jalur / salah arah -> Menghitung rute alternatif terdekat...");
+          lastRerouteTime = now;
+          calculateRoute(targetLat, targetLon);
+        }
+      }
+
+    }, (err) => log("GPS Error: " + err.message), { enableHighAccuracy: true, maximumAge: 2000, timeout: 5000 });
   } else {
     log("Geolocation tidak didukung browser ini.");
   }
 
-  // 2. Web Bluetooth Connection Logic (Mode Longgar All Devices)
+  // Fungsi utilitas menghitung jarak meter antar dua koordinat GPS
+  function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // Radius bumi dalam meter
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  // 4. Web Bluetooth Connection Logic
   document.getElementById('btnConnect').addEventListener('click', async () => {
     if (bluetoothDevice && bluetoothDevice.gatt.connected) {
       bluetoothDevice.gatt.disconnect();
@@ -100,7 +161,7 @@
     }
 
     try {
-      log("Memindai seluruh perangkat BLE sekitar...");
+      log("Memindai perangkat BLE...");
       bluetoothDevice = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [SERVICE_UUID]
@@ -108,33 +169,29 @@
 
       bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
-      log("Menghubungkan ke GATT Server...");
       const server = await bluetoothDevice.gatt.connect();
-      
-      log("Mengambil Service BLE...");
       const service = await server.getPrimaryService(SERVICE_UUID);
       
-      log("Mengambil Characteristic BLE...");
       navChar = await service.getCharacteristic(CHAR_NAV_UUID);
       cmdChar = await service.getCharacteristic(CHAR_CMD_UUID);
 
       await cmdChar.startNotifications();
       cmdChar.addEventListener('characteristicvaluechanged', (evt) => {
         const val = new TextDecoder().decode(evt.target.value);
-        log("Notifikasi dari Stang: " + val);
+        log("Notifikasi Stang: " + val);
         if (val.includes("ALT_ROUTE")) {
-          alert("Tombol ALT di stang ditekan! Mencari rute alternatif...");
+          alert("Tombol ALT ditekan! Mencari jalur alternatif...");
+          if (targetLat && targetLon) calculateRoute(targetLat, targetLon);
         }
       });
 
       document.getElementById('lblStatus').className = "status-box active";
-      document.getElementById('lblStatus').innerHTML = "<strong>Status Bluetooth:</strong> TERHUBUNG ke " + (bluetoothDevice.name || "Perangkat BLE");
+      document.getElementById('lblStatus').innerHTML = "<strong>Status Bluetooth:</strong> TERHUBUNG!";
       document.getElementById('btnConnect').className = "btn btn-connect connected";
       document.getElementById('btnConnect').innerText = "❌ PUTUSKAN BLUETOOTH";
-      log("TERHUBUNG 100%! Siap mengirim rute.");
+      log("BLE Terhubung 100%!");
     } catch (err) {
       log("ERROR BLE: " + err.message);
-      document.getElementById('lblStatus').innerHTML = "<strong>Status Bluetooth:</strong> Gagal Konek (" + err.message + ")";
     }
   });
 
@@ -143,39 +200,46 @@
     document.getElementById('lblStatus').innerHTML = "<strong>Status Bluetooth:</strong> Terputus";
     document.getElementById('btnConnect').className = "btn btn-connect";
     document.getElementById('btnConnect').innerText = "🔌 HUBUNGKAN KE STANG MOTOR";
-    log("Koneksi terputus.");
+    log("Koneksi Bluetooth terputus.");
   }
 
-  // 3. Pencarian Lokasi
+  // 5. Pencarian Lokasi Teks (Nominatim)
   async function searchLocation() {
     const q = document.getElementById('txtSearch').value;
     if (!q) return;
 
-    log("Mencari rute ke: " + q);
-    document.getElementById('lblNavInfo').innerText = "Mencari lokasi tujuan...";
+    log("Mencari lokasi: " + q);
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
       const data = await res.json();
 
       if (data.length > 0) {
-        calculateRoute(parseFloat(data[0].lat), parseFloat(data[0].lon));
+        targetLat = parseFloat(data[0].lat);
+        targetLon = parseFloat(data[0].lon);
+
+        if (destinationMarker) map.removeLayer(destinationMarker);
+        destinationMarker = L.marker([targetLat, targetLon], { draggable: true }).addTo(map)
+          .bindPopup(data[0].display_name).openPopup();
+        map.setView([targetLat, targetLon], 16);
+
+        calculateRoute(targetLat, targetLon);
       } else {
         alert("Lokasi tidak ditemukan!");
-        log("Lokasi tidak ditemukan.");
       }
     } catch(e) {
       log("Search Error: " + e.message);
     }
   }
 
-  // 4. Perhitungan Rute & Transmisi BLE
+  // 6. Kalkulasi Rute Terdekat via OSRM (Otomatis Menghindari Lawan Arah / One-Way)
   function calculateRoute(destLat, destLon) {
     if (routingControl) map.removeControl(routingControl);
 
     routingControl = L.Routing.control({
       waypoints: [L.latLng(currentLat, currentLon), L.latLng(destLat, destLon)],
       router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
-      show: false
+      show: false,
+      // OSRM secara default mencari rute terdekat dan tercepat berdasarkan legalitas lalu lintas (anti lawan arah)
     }).addTo(map);
 
     routingControl.on('routesfound', (e) => {
@@ -184,7 +248,7 @@
       
       const turnStr = instructions.type.includes("Right") ? "RIGHT" : (instructions.type.includes("Left") ? "LEFT" : "STRAIGHT");
       const distInt = Math.round(instructions.distance);
-      const streetStr = instructions.road || "Jl. Tujuan";
+      const streetStr = instructions.road || "Jalur Navigasi";
 
       document.getElementById('lblNavInfo').innerHTML = 
         `<strong>Petunjuk:</strong> ${instructions.text} (${distInt}m)<br><strong>Jalan:</strong> ${streetStr}`;
@@ -206,12 +270,10 @@
         const data = new TextEncoder().encode(jsonString);
         
         navChar.writeValueWithoutResponse(data).then(() => {
-          log("Data rute berhasil dikirim ke ESP32!");
+          log("Rute & Instruksi Terkirim ke ESP32!");
         }).catch((err) => {
           log("Gagal kirim rute: " + err.message);
         });
-      } else {
-        log("Rute terhitung, tapi BLE belum terhubung!");
       }
     });
   }
