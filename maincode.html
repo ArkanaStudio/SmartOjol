@@ -3,12 +3,16 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Ojol Smart Nav - GraphHopper Fixed</title>
+    <title>Ojol Smart Nav Web Controller</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
     <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Leaflet Routing Machine -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
 
     <style>
         * {
@@ -69,6 +73,7 @@
             display: none;
         }
 
+        /* Tombol X disembunyikan sampai tujuan dipilih */
         .input-group {
             display: flex;
             gap: 8px;
@@ -130,37 +135,33 @@
         </div>
 
         <div class="input-group">
-            <input type="text" id="txtSearch" placeholder="Cari lokasi atau ketuk langsung di peta..." />
+            <input type="text" id="txtSearch" placeholder="Ketik tujuan atau ketuk langsung di peta..." />
             <button class="btn" onclick="searchLocation()">CARI</button>
         </div>
 
+        <!-- Tombol X untuk Hapus / Reset Lokasi Tujuan -->
         <button id="btnClearDest" class="btn btn-clear" onclick="clearDestination()">❌ HAPUS TUJUAN / PILIH
             ULANG</button>
 
         <div class="status-box" id="lblNavInfo">
-            <strong>Mode GraphHopper Motor:</strong> Ketuk titik di peta untuk mulai navigasi presisi.
+            <strong>Navigasi:</strong> Ketuk salah satu titik di peta sekali untuk mengunci tujuan.
         </div>
 
-        <div class="log-box" id="logBox">> Web App Siap (GraphHopper Connected).</div>
+        <div class="log-box" id="logBox">> Web App Siap. Silakan hubungkan Bluetooth...</div>
     </div>
 
     <script>
-        let map;
+        let map, routingControl;
         let userMarker = null;
         let destinationMarker = null;
-        let routePolyline = null;
-
         let currentLat = -6.200000, currentLon = 106.816666;
         let targetLat = null, targetLon = null;
-        let isDestinationLocked = false;
-        let isGpsReady = false;
-
+        let isDestinationLocked = false; // Status apakah tujuan sudah dikunci
         let bluetoothDevice = null;
         let navChar = null, cmdChar = null;
 
         let lastRerouteTime = 0;
-        const REROUTE_COOLDOWN_MS = 6000;
-        const GH_API_KEY = "4c27c63b-a364-443c-84b5-7d00328be385";
+        const REROUTE_COOLDOWN_MS = 8000;
 
         const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
         const CHAR_NAV_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
@@ -172,37 +173,39 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        // 1. Inisialisasi Peta Leaflet
-        map = L.map('map').setView([currentLat, currentLon], 16);
+        // 1. Inisialisasi Peta
+        map = L.map('map').setView([currentLat, currentLon], 15);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-        // 2. Fitur Klik Peta Sekali Sentuh Kunci Tujuan
+        // 2. Fitur Klik Peta (Sekali Sentuh Langsung Kunci, Tidak Bisa Digeser-geser)
         map.on('click', function (e) {
-            if (!isGpsReady) {
-                alert("Menunggu sinyal GPS HP terkunci... Mohon sebentar.");
-                return;
-            }
-
+            // Jika tujuan sudah dikunci, abaikan sentuhan peta berikutnya sampai tombol X ditekan
             if (isDestinationLocked) {
-                log("Tujuan terkunci. Tekan tombol 'HAPUS TUJUAN' untuk mengganti lokasi.");
+                log("Tujuan sudah terkunci. Tekan tombol 'HAPUS TUJUAN' jika ingin mengganti lokasi.");
                 return;
             }
 
             targetLat = e.latlng.lat;
             targetLon = e.latlng.lng;
-            isDestinationLocked = true;
+            isDestinationLocked = true; // Kunci permanen sampai di-reset
 
-            log("Tujuan dipilih di peta. Menghitung rute...");
+            log("Titik tujuan berhasil dikunci!");
 
-            if (destinationMarker) map.removeLayer(destinationMarker);
+            if (destinationMarker) {
+                map.removeLayer(destinationMarker);
+            }
 
+            // draggable: false agar marker tidak bisa terseret/tergeser saat tersentuh jari
             destinationMarker = L.marker([targetLat, targetLon], { draggable: false }).addTo(map)
                 .bindPopup("Tujuan Terkunci").openPopup();
 
+            // Munculkan tombol X (Hapus)
             document.getElementById('btnClearDest').style.display = "block";
-            fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
+
+            calculateRoute(targetLat, targetLon);
         });
 
+        // Fungsi untuk Menghapus / Reset Tujuan via Tombol X
         function clearDestination() {
             isDestinationLocked = false;
             targetLat = null;
@@ -213,17 +216,18 @@
                 destinationMarker = null;
             }
 
-            if (routePolyline) {
-                map.removeLayer(routePolyline);
-                routePolyline = null;
+            if (routingControl) {
+                map.removeControl(routingControl);
+                routingControl = null;
             }
 
+            // Sembunyikan tombol X lagi
             document.getElementById('btnClearDest').style.display = "none";
-            document.getElementById('lblNavInfo').innerHTML = "<strong>Mode Motor:</strong> Tujuan dihapus. Ketuk peta untuk memilih lokasi baru.";
-            log("Tujuan direset.");
+            document.getElementById('lblNavInfo').innerHTML = "<strong>Navigasi:</strong> Tujuan dihapus. Ketuk peta untuk memilih tujuan baru.";
+            log("Tujuan direset. Silakan pilih lokasi baru.");
         }
 
-        // 3. Auto Tracking GPS Presisi Tinggi
+        // 3. Auto Tracking GPS & Auto-Rerouting
         if ("geolocation" in navigator) {
             navigator.geolocation.watchPosition((pos) => {
                 const newLat = pos.coords.latitude;
@@ -233,34 +237,25 @@
 
                 currentLat = newLat;
                 currentLon = newLon;
-                isGpsReady = true;
 
                 if (!userMarker) {
                     userMarker = L.marker([currentLat, currentLon]).addTo(map).bindPopup("Posisi Anda").openPopup();
-                    map.setView([currentLat, currentLon], 18);
-                    log("GPS Terkunci Akurat!");
+                    map.setView([currentLat, currentLon], 16);
                 } else {
                     userMarker.setLatLng([currentLat, currentLon]);
                 }
 
-                // Auto-Rerouting otomatis jika bergeser > 15 meter dari jalur
-                if (isDestinationLocked && targetLat && targetLon && distanceMoved > 15) {
+                // Auto-Rerouting otomatis jika salah arah/keluar jalur sejauh > 25 meter
+                if (isDestinationLocked && targetLat && targetLon && distanceMoved > 25) {
                     const now = Date.now();
                     if (now - lastRerouteTime > REROUTE_COOLDOWN_MS) {
-                        log("Pergeseran posisi -> Menghitung ulang jalur alternatif...");
+                        log("Terdeteksi keluar jalur -> Menghitung ulang rute terdekat...");
                         lastRerouteTime = now;
-                        fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
+                        calculateRoute(targetLat, targetLon);
                     }
                 }
 
-            }, (err) => {
-                log("GPS Error: " + err.message);
-                isGpsReady = true; // Fallback agar tetap bisa jalan walau error
-            }, {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 10000
-            });
+            }, (err) => log("GPS Error: " + err.message), { enableHighAccuracy: true, maximumAge: 2000, timeout: 5000 });
         } else {
             log("Geolocation tidak didukung browser ini.");
         }
@@ -276,7 +271,7 @@
             return R * c;
         }
 
-        // 4. Web Bluetooth Connection
+        // 4. Web Bluetooth Connection Logic
         document.getElementById('btnConnect').addEventListener('click', async () => {
             if (bluetoothDevice && bluetoothDevice.gatt.connected) {
                 bluetoothDevice.gatt.disconnect();
@@ -304,7 +299,7 @@
                     log("Notifikasi Stang: " + val);
                     if (val.includes("ALT_ROUTE") && isDestinationLocked && targetLat && targetLon) {
                         alert("Tombol ALT ditekan! Mencari jalur alternatif...");
-                        fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
+                        calculateRoute(targetLat, targetLon);
                     }
                 });
 
@@ -344,10 +339,10 @@
                     if (destinationMarker) map.removeLayer(destinationMarker);
                     destinationMarker = L.marker([targetLat, targetLon], { draggable: false }).addTo(map)
                         .bindPopup(data[0].display_name).openPopup();
-                    map.setView([targetLat, targetLon], 17);
+                    map.setView([targetLat, targetLon], 16);
 
                     document.getElementById('btnClearDest').style.display = "block";
-                    fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
+                    calculateRoute(targetLat, targetLon);
                 } else {
                     alert("Lokasi tidak ditemukan!");
                 }
@@ -356,87 +351,50 @@
             }
         }
 
-        // 6. GraphHopper API Routing (Menggunakan profile=bike yang kompatibel penuh)
-        async function fetchGraphHopperRoute(startLat, startLon, endLat, endLon) {
-            // Menggunakan profile=bike agar stabil di semua tier akun GraphHopper
-            const url = `https://graphhopper.com/api/1/route?point=${startLat},${startLon}&point=${endLat},${endLon}&profile=bike&instructions=true&locale=id&key=${GH_API_KEY}`;
+        // 6. Kalkulasi Rute OSRM
+        function calculateRoute(destLat, destLon) {
+            if (routingControl) map.removeControl(routingControl);
 
-            try {
-                log("Mengirim permintaan rute ke GraphHopper...");
-                const response = await fetch(url);
-                const data = await response.json();
+            routingControl = L.Routing.control({
+                waypoints: [L.latLng(currentLat, currentLon), L.latLng(destLat, destLon)],
+                router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+                show: false
+            }).addTo(map);
 
-                if (data.message) {
-                    alert("GraphHopper Error: " + data.message);
-                    log("API Error: " + data.message);
-                    return;
-                }
+            routingControl.on('routesfound', (e) => {
+                const route = e.routes[0];
+                const instructions = route.instructions[0];
 
-                if (data.paths && data.paths.length > 0) {
-                    const path = data.paths[0];
-                    const distanceMeters = Math.round(path.distance);
-                    const instructions = path.instructions[0] || { text: "Lanjutkan perjalanan", distance: distanceMeters };
+                const turnStr = instructions.type.includes("Right") ? "RIGHT" : (instructions.type.includes("Left") ? "LEFT" : "STRAIGHT");
+                const distInt = Math.round(instructions.distance);
+                const streetStr = instructions.road || "Jalur Navigasi";
 
-                    const streetName = instructions.street_name || "Jalan Lingkungan";
-                    const instructionText = instructions.text || "Ikuti jalur";
-                    const stepDist = Math.round(instructions.distance);
+                document.getElementById('lblNavInfo').innerHTML =
+                    `<strong>Petunjuk:</strong> ${instructions.text} (${distInt}m)<br><strong>Jalan:</strong> ${streetStr}`;
 
-                    document.getElementById('lblNavInfo').innerHTML =
-                        `<strong>Navigasi:</strong> ${instructionText} (${stepDist}m)<br><strong>Jalan:</strong> ${streetName} (Total: ${distanceMeters}m)`;
+                const pts = route.coordinates.slice(0, 10).map((c) => {
+                    return [Math.round((c.lng - currentLon) * 10000), Math.round((c.lat - currentLat) * 10000)];
+                });
 
-                    if (routePolyline) {
-                        map.removeLayer(routePolyline);
-                    }
+                if (navChar && bluetoothDevice && bluetoothDevice.gatt.connected) {
+                    const payload = {
+                        speed: 35,
+                        turn: turnStr,
+                        dist: distInt,
+                        street: streetStr,
+                        pts: pts
+                    };
 
-                    const latLngs = decodePolyline(path.points);
-                    routePolyline = L.polyline(latLngs, { color: '#ff5722', weight: 6, opacity: 0.85 }).addTo(map);
+                    const jsonString = JSON.stringify(payload);
+                    const data = new TextEncoder().encode(jsonString);
 
-                    const pts = latLngs.slice(0, 10).map((c) => {
-                        return [Math.round((c[1] - currentLon) * 10000), Math.round((c[0] - currentLat) * 10000)];
+                    navChar.writeValueWithoutResponse(data).then(() => {
+                        log("Rute & Instruksi Terkirim ke ESP32!");
+                    }).catch((err) => {
+                        log("Gagal kirim rute: " + err.message);
                     });
-
-                    if (navChar && bluetoothDevice && bluetoothDevice.gatt.connected) {
-                        const payload = {
-                            speed: 35,
-                            turn: "STRAIGHT",
-                            dist: stepDist,
-                            street: streetName,
-                            pts: pts
-                        };
-
-                        const jsonString = JSON.stringify(payload);
-                        const bleData = new TextEncoder().encode(jsonString);
-
-                        navChar.writeValueWithoutResponse(bleData).then(() => {
-                            log("Data rute berhasil dikirim ke ESP32!");
-                        }).catch((err) => {
-                            log("Gagal kirim BLE: " + err.message);
-                        });
-                    }
-
-                } else {
-                    alert("Rute tidak ditemukan oleh sistem.");
                 }
-            } catch (error) {
-                log("Network Error: " + error.message);
-                alert("Gagal terhubung ke server GraphHopper.");
-            }
-        }
-
-        // Decoder Polyline Standar
-        function decodePolyline(str, precision) {
-            var index = 0, lat = 0, lng = 0, coordinates = [], shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision || 5);
-            while (index < str.length) {
-                byte = null; shift = 0; result = 0;
-                do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
-                latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
-                shift = 0; result = 0;
-                do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
-                longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
-                lat += latitude_change; lng += longitude_change;
-                coordinates.push([lat / factor, lng / factor]);
-            }
-            return coordinates;
+            });
         }
     </script>
 </body>
