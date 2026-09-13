@@ -3,16 +3,12 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Ojol Smart Nav Web Controller - Motor Mode</title>
+    <title>Ojol Smart Nav - GraphHopper Motor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
     <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- Leaflet Routing Machine -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
-    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
 
     <style>
         * {
@@ -142,24 +138,28 @@
             ULANG</button>
 
         <div class="status-box" id="lblNavInfo">
-            <strong>Mode Motor:</strong> Ketuk titik di peta untuk mulai navigasi dari posisi Anda.
+            <strong>Mode GraphHopper Motor:</strong> Ketuk titik di peta untuk mulai navigasi presisi tinggi.
         </div>
 
-        <div class="log-box" id="logBox">> Web App Siap (Mode Motor Aktif).</div>
+        <div class="log-box" id="logBox">> Web App Siap (GraphHopper API Connected).</div>
     </div>
 
     <script>
-        let map, routingControl;
+        let map;
         let userMarker = null;
         let destinationMarker = null;
+        let routePolyline = null; // Menyimpan garis rute dari GraphHopper
+
         let currentLat = -6.200000, currentLon = 106.816666;
         let targetLat = null, targetLon = null;
         let isDestinationLocked = false;
+
         let bluetoothDevice = null;
         let navChar = null, cmdChar = null;
 
         let lastRerouteTime = 0;
-        const REROUTE_COOLDOWN_MS = 6000; // Jeda rerouting dipercepat jadi 6 detik
+        const REROUTE_COOLDOWN_MS = 6000;
+        const GH_API_KEY = "4c27c63b-a364-443c-84b5-7d00328be385"; // API Key GraphHopper Anda
 
         const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
         const CHAR_NAV_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
@@ -186,7 +186,7 @@
             targetLon = e.latlng.lng;
             isDestinationLocked = true;
 
-            log("Tujuan dipilih di peta. Menghitung rute motor...");
+            log("Tujuan dipilih di peta. Menghitung rute GraphHopper...");
 
             if (destinationMarker) map.removeLayer(destinationMarker);
 
@@ -194,7 +194,7 @@
                 .bindPopup("Tujuan Terkunci").openPopup();
 
             document.getElementById('btnClearDest').style.display = "block";
-            calculateMotorRoute(targetLat, targetLon);
+            fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
         });
 
         function clearDestination() {
@@ -207,9 +207,9 @@
                 destinationMarker = null;
             }
 
-            if (routingControl) {
-                map.removeControl(routingControl);
-                routingControl = null;
+            if (routePolyline) {
+                map.removeLayer(routePolyline);
+                routePolyline = null;
             }
 
             document.getElementById('btnClearDest').style.display = "none";
@@ -217,7 +217,7 @@
             log("Tujuan direset.");
         }
 
-        // 3. Auto Tracking GPS Presisi Tinggi (Mendeteksi Gang Kecil)
+        // 3. Auto Tracking GPS Presisi Tinggi
         if ("geolocation" in navigator) {
             navigator.geolocation.watchPosition((pos) => {
                 const newLat = pos.coords.latitude;
@@ -230,24 +230,24 @@
 
                 if (!userMarker) {
                     userMarker = L.marker([currentLat, currentLon]).addTo(map).bindPopup("Posisi Anda").openPopup();
-                    map.setView([currentLat, currentLon], 18); // Zoom lebih dekat agar detail gang terlihat
+                    map.setView([currentLat, currentLon], 18);
                 } else {
                     userMarker.setLatLng([currentLat, currentLon]);
                 }
 
-                // Auto-Rerouting otomatis jika bergeser > 15 meter dari jalur (cepat tanggap jika salah gang)
+                // Auto-Rerouting otomatis jika bergeser > 15 meter dari jalur
                 if (isDestinationLocked && targetLat && targetLon && distanceMoved > 15) {
                     const now = Date.now();
                     if (now - lastRerouteTime > REROUTE_COOLDOWN_MS) {
-                        log("Pergeseran posisi terdeteksi -> Menghitung ulang jalur motor...");
+                        log("Pergeseran posisi terdeteksi -> Menghitung ulang jalur alternatif via GraphHopper...");
                         lastRerouteTime = now;
-                        calculateMotorRoute(targetLat, targetLon);
+                        fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
                     }
                 }
 
             }, (err) => log("GPS Error: " + err.message), {
-                enableHighAccuracy: true, // Paksa chip GPS bekerja maksimal untuk akurasi gang
-                maximumAge: 0,            // Jangan pakai cache posisi lama
+                enableHighAccuracy: true,
+                maximumAge: 0,
                 timeout: 5000
             });
         } else {
@@ -292,8 +292,8 @@
                     const val = new TextDecoder().decode(evt.target.value);
                     log("Notifikasi Stang: " + val);
                     if (val.includes("ALT_ROUTE") && isDestinationLocked && targetLat && targetLon) {
-                        alert("Tombol ALT ditekan! Mencari jalur alternatif motor...");
-                        calculateMotorRoute(targetLat, targetLon);
+                        alert("Tombol ALT ditekan! Mencari jalur alternatif...");
+                        fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
                     }
                 });
 
@@ -315,7 +315,7 @@
             log("Koneksi Bluetooth terputus.");
         }
 
-        // 5. Pencarian Lokasi Teks
+        // 5. Pencarian Lokasi Teks (Nominatim)
         async function searchLocation() {
             const q = document.getElementById('txtSearch').value;
             if (!q) return;
@@ -336,7 +336,7 @@
                     map.setView([targetLat, targetLon], 17);
 
                     document.getElementById('btnClearDest').style.display = "block";
-                    calculateMotorRoute(targetLat, targetLon);
+                    fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
                 } else {
                     alert("Lokasi tidak ditemukan!");
                 }
@@ -345,57 +345,109 @@
             }
         }
 
-        // 6. Kalkulasi Rute Khusus Motor (Profil Bike: Lewat Gang, Jalan Kecil, Anti Memutar Jauh)
-        function calculateMotorRoute(destLat, destLon) {
-            if (routingControl) map.removeControl(routingControl);
+        // 6. Fungsi Utama Pengambilan Rute Pintar via GraphHopper API (Profil: Scooter/Motor)
+        async function fetchGraphHopperRoute(startLat, startLon, endLat, endLon) {
+            // Parameter profil 'scooter' atau 'bike' khusus motor di GraphHopper
+            const url = `https://graphhopper.com/api/1/route?point=${startLat},${startLon}&point=${endLat},${endLon}&vehicle=scooter&instructions=true&locale=id&key=${GH_API_KEY}`;
 
-            routingControl = L.Routing.control({
-                waypoints: [L.latLng(currentLat, currentLon), L.latLng(destLat, destLon)],
-                router: L.Routing.osrmv1({
-                    serviceUrl: 'https://router.project-osrm.org/route/v1',
-                    profile: 'bike' // <--- MENGAKTIFKAN JALUR MOTOR (Bisa tembus gang kecil & efisien)
-                }),
-                lineOptions: {
-                    styles: [{ color: '#ff5722', opacity: 0.8, weight: 6 }] // Garis rute warna oranye terang khas navigasi
-                },
-                show: false,
-                addWaypoints: false
-            }).addTo(map);
+            try {
+                log("Meminta rute pintar dari server GraphHopper...");
+                const response = await fetch(url);
+                const data = await response.json();
 
-            routingControl.on('routesfound', (e) => {
-                const route = e.routes[0];
-                const instructions = route.instructions[0];
+                if (data.paths && data.paths.length > 0) {
+                    const path = data.paths[0];
+                    const distanceMeters = Math.round(path.distance);
+                    const instructions = path.instructions[0] || { text: "Ikuti jalur utama", distance: distanceMeters };
 
-                const turnStr = instructions.type.includes("Right") ? "RIGHT" : (instructions.type.includes("Left") ? "LEFT" : "STRAIGHT");
-                const distInt = Math.round(instructions.distance);
-                const streetStr = instructions.road || "Gang / Jalan Lingkungan";
+                    const streetName = instructions.street_name || "Jalur Lingkungan / Gang";
+                    const instructionText = instructions.text || "Lurus terus";
+                    const stepDist = Math.round(instructions.distance);
 
-                document.getElementById('lblNavInfo').innerHTML =
-                    `<strong>Petunjuk Motor:</strong> ${instructions.text} (${distInt}m)<br><strong>Jalur:</strong> ${streetStr}`;
+                    document.getElementById('lblNavInfo').innerHTML =
+                        `<strong>GraphHopper Motor:</strong> ${instructionText} (${stepDist}m)<br><strong>Jalur:</strong> ${streetName} (Total: ${distanceMeters}m)`;
 
-                const pts = route.coordinates.slice(0, 10).map((c) => {
-                    return [Math.round((c.lng - currentLon) * 10000), Math.round((c.lat - currentLat) * 10000)];
-                });
+                    // Hapus polyline rute lama jika ada
+                    if (routePolyline) {
+                        map.removeLayer(routePolyline);
+                    }
 
-                if (navChar && bluetoothDevice && bluetoothDevice.gatt.connected) {
-                    const payload = {
-                        speed: 35,
-                        turn: turnStr,
-                        dist: distInt,
-                        street: streetStr,
-                        pts: pts
-                    };
+                    // Decode Polyline koordinat jalur dari GraphHopper
+                    const latLngs = decodePolyline(path.points);
+                    routePolyline = L.polyline(latLngs, { color: '#ff5722', weight: 6, opacity: 0.85 }).addTo(map);
 
-                    const jsonString = JSON.stringify(payload);
-                    const data = new TextEncoder().encode(jsonString);
-
-                    navChar.writeValueWithoutResponse(data).then(() => {
-                        log("Rute motor terkirim ke ESP32!");
-                    }).catch((err) => {
-                        log("Gagal kirim rute: " + err.message);
+                    // Ambil sampel titik koordinat relatif untuk dikirim via BLE ke ESP32-C3
+                    const pts = latLngs.slice(0, 10).map((c) => {
+                        return [Math.round((c[1] - currentLon) * 10000), Math.round((c[0] - currentLat) * 10000)];
                     });
+
+                    // Kirim data ke ESP32 via BLE
+                    if (navChar && bluetoothDevice && bluetoothDevice.gatt.connected) {
+                        const payload = {
+                            speed: 35,
+                            turn: "STRAIGHT",
+                            dist: stepDist,
+                            street: streetName,
+                            pts: pts
+                        };
+
+                        const jsonString = JSON.stringify(payload);
+                        const bleData = new TextEncoder().encode(jsonString);
+
+                        navChar.writeValueWithoutResponse(bleData).then(() => {
+                            log("Data rute GraphHopper berhasil dikirim ke ESP32!");
+                        }).catch((err) => {
+                            log("Gagal kirim BLE: " + err.message);
+                        });
+                    }
+
+                } else {
+                    alert("Gagal menghitung rute GraphHopper.");
                 }
-            });
+            } catch (error) {
+                log("GraphHopper Error: " + error.message);
+            }
+        }
+
+        // Fungsi Decoder Format Polyline Bawaan GraphHopper
+        function decodePolyline(str, precision) {
+            var index = 0,
+                lat = 0,
+                lng = 0,
+                coordinates = [],
+                shift = 0,
+                result = 0,
+                byte = null,
+                latitude_change,
+                longitude_change,
+                factor = Math.pow(10, precision || 5);
+
+            while (index < str.length) {
+                byte = null;
+                shift = 0;
+                result = 0;
+                do {
+                    byte = str.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+                latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+                shift = 0;
+                result = 0;
+                do {
+                    byte = str.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+                longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+                lat += latitude_change;
+                lng += longitude_change;
+
+                coordinates.push([lat / factor, lng / factor]);
+            }
+            return coordinates;
         }
     </script>
 </body>
