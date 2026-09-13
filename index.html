@@ -348,7 +348,7 @@
         // 6. Fungsi Utama Pengambilan Rute Pintar via GraphHopper API (Profil: Scooter/Motor)
         async function fetchGraphHopperRoute(startLat, startLon, endLat, endLon) {
             // Parameter profil 'scooter' atau 'bike' khusus motor di GraphHopper
-            const url = `https://graphhopper.com/api/1/route?point=${startLat},${startLon}&point=${endLat},${endLon}&vehicle=scooter&instructions=true&locale=id&key=${GH_API_KEY}`;
+            const url = `https://graphhopper.com/api/1/route?point=${startLat},${startLon}&point=${endLat},${endLon}&vehicle=bike&instructions=true&locale=id&key=${GH_API_KEY}`;
 
             try {
                 log("Meminta rute pintar dari server GraphHopper...");
