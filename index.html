@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Ojol Smart Nav - GraphHopper Fixed</title>
+    <title>Ojol Smart Nav - GMaps Experience</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
     <!-- Leaflet CSS & JS -->
@@ -23,32 +23,117 @@
             color: #fff;
         }
 
-        #map {
-            height: 48vh;
+        #mapContainer {
+            position: relative;
+            height: 55vh;
             width: 100%;
         }
 
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        /* Banner Navigasi Utama ala Google Maps (Hijau Gelap) */
+        .gmaps-banner {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            background: #0b4f4c;
+            color: #fff;
+            padding: 12px 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .banner-top {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-icon-big {
+            font-size: 32px;
+            font-weight: bold;
+            min-width: 40px;
+            text-align: center;
+        }
+
+        .nav-text-group {
+            flex: 1;
+        }
+
+        .nav-title {
+            font-size: 16px;
+            font-weight: bold;
+            line-height: 1.2;
+        }
+
+        .nav-subtitle {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        .banner-bottom {
+            background: #073836;
+            padding: 6px 10px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        /* Tombol Floating Re-Center (Fokus ke Lokasi Saya) */
+        .btn-recenter {
+            position: absolute;
+            bottom: 20px;
+            right: 15px;
+            background: #ffffff;
+            color: #333;
+            border: none;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            font-size: 22px;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-recenter:active {
+            background: #e0e0e0;
+        }
+
         .panel {
-            padding: 15px;
-            height: 52vh;
+            padding: 12px;
+            height: 45vh;
             box-sizing: border-box;
             background: #1e1e1e;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
         }
 
         .btn {
-            padding: 14px;
+            padding: 12px;
             border-radius: 8px;
             border: none;
             background: #008CBA;
             color: white;
             font-weight: bold;
-            font-size: 15px;
+            font-size: 14px;
             cursor: pointer;
-            transition: background 0.2s;
             text-align: center;
         }
 
@@ -76,12 +161,12 @@
 
         input {
             flex: 1;
-            padding: 12px;
+            padding: 10px;
             border-radius: 8px;
             border: 1px solid #444;
             background: #2a2a2a;
             color: white;
-            font-size: 14px;
+            font-size: 13px;
             outline: none;
         }
 
@@ -91,9 +176,9 @@
 
         .status-box {
             background: #2a2a2a;
-            padding: 12px;
+            padding: 10px;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12px;
             border-left: 5px solid #ffa000;
             line-height: 1.4;
         }
@@ -106,10 +191,10 @@
             background: #000;
             color: #00ff00;
             font-family: monospace;
-            font-size: 11px;
-            padding: 10px;
+            font-size: 10px;
+            padding: 8px;
             border-radius: 6px;
-            max-height: 100px;
+            max-height: 50px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
@@ -119,7 +204,25 @@
 
 <body>
 
-    <div id="map"></div>
+    <div id="mapContainer">
+        <div class="gmaps-banner" id="gmapsBanner">
+            <div class="banner-top">
+                <div class="nav-icon-big" id="navIcon">⬆</div>
+                <div class="nav-text-group">
+                    <div class="nav-title" id="navMainText">Menunggu Tujuan...</div>
+                    <div class="nav-subtitle" id="navSubText">Ketuk peta untuk mulai navigasi</div>
+                </div>
+            </div>
+            <div class="banner-bottom" id="bannerNextStep" style="display: none;">
+                <span>Kemudian</span> <span id="nextIcon">➔</span> <span id="nextText">jalan terus</span>
+            </div>
+        </div>
+
+        <div id="map"></div>
+
+        <!-- Tombol Fokus ke Lokasi Saya -->
+        <button class="btn-recenter" onclick="recenterMap()" title="Fokus ke Lokasi Saya">🎯</button>
+    </div>
 
     <div class="panel">
         <button id="btnConnect" class="btn btn-connect">🔌 HUBUNGKAN KE STANG MOTOR</button>
@@ -130,30 +233,29 @@
         </div>
 
         <div class="input-group">
-            <input type="text" id="txtSearch" placeholder="Cari lokasi atau ketuk langsung di peta..." />
+            <input type="text" id="txtSearch" placeholder="Cari lokasi atau ketuk peta..." />
             <button class="btn" onclick="searchLocation()">CARI</button>
         </div>
 
         <button id="btnClearDest" class="btn btn-clear" onclick="clearDestination()">❌ HAPUS TUJUAN / PILIH
             ULANG</button>
 
-        <div class="status-box" id="lblNavInfo">
-            <strong>Mode GraphHopper Motor:</strong> Ketuk titik di peta untuk mulai navigasi presisi.
-        </div>
-
-        <div class="log-box" id="logBox">> Web App Siap (GraphHopper Connected).</div>
+        <div class="log-box" id="logBox">> Web App Siap (GMaps Experience).</div>
     </div>
 
     <script>
         let map;
         let userMarker = null;
         let destinationMarker = null;
-        let routePolyline = null;
+        let routePolyline = null;       // Garis rute sisa (biru terang)
+        let traveledPolyline = null;    // Garis rute yang sudah dilewati (abu-abu/redup)
+        let fullRouteCoordinates = [];  // Seluruh koordinat rute aktif
 
         let currentLat = -6.200000, currentLon = 106.816666;
         let targetLat = null, targetLon = null;
         let isDestinationLocked = false;
         let isGpsReady = false;
+        let isFollowingUser = true;
 
         let bluetoothDevice = null;
         let navChar = null, cmdChar = null;
@@ -172,27 +274,41 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        // 1. Inisialisasi Peta Leaflet
-        map = L.map('map').setView([currentLat, currentLon], 16);
+        // 1. Inisialisasi Peta
+        map = L.map('map', { zoomControl: false }).setView([currentLat, currentLon], 18);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-        // 2. Fitur Klik Peta Sekali Sentuh Kunci Tujuan
+        map.on('dragstart', function () {
+            isFollowingUser = false; // Lepas auto-center jika user geser peta manual
+        });
+
+        // Tombol Recenter Manual
+        function recenterMap() {
+            isFollowingUser = true;
+            if (userMarker) {
+                map.setView(userMarker.getLatLng(), 18, { animate: true });
+                log("Kamera dikunci kembali ke posisi Anda.");
+            }
+        }
+
+        // 2. Klik Peta untuk Menetapkan Tujuan
         map.on('click', function (e) {
             if (!isGpsReady) {
-                alert("Menunggu sinyal GPS HP terkunci... Mohon sebentar.");
+                alert("Menunggu sinyal GPS HP terkunci...");
                 return;
             }
 
             if (isDestinationLocked) {
-                log("Tujuan terkunci. Tekan tombol 'HAPUS TUJUAN' untuk mengganti lokasi.");
+                log("Tujuan terkunci. Tekan tombol HAPUS untuk mengganti.");
                 return;
             }
 
             targetLat = e.latlng.lat;
             targetLon = e.latlng.lng;
             isDestinationLocked = true;
+            isFollowingUser = true;
 
-            log("Tujuan dipilih di peta. Menghitung rute...");
+            log("Tujuan dipilih. Menghitung rute...");
 
             if (destinationMarker) map.removeLayer(destinationMarker);
 
@@ -208,22 +324,20 @@
             targetLat = null;
             targetLon = null;
 
-            if (destinationMarker) {
-                map.removeLayer(destinationMarker);
-                destinationMarker = null;
-            }
-
-            if (routePolyline) {
-                map.removeLayer(routePolyline);
-                routePolyline = null;
-            }
+            if (destinationMarker) { map.removeLayer(destinationMarker); destinationMarker = null; }
+            if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+            if (traveledPolyline) { map.removeLayer(traveledPolyline); traveledPolyline = null; }
+            fullRouteCoordinates = [];
 
             document.getElementById('btnClearDest').style.display = "none";
-            document.getElementById('lblNavInfo').innerHTML = "<strong>Mode Motor:</strong> Tujuan dihapus. Ketuk peta untuk memilih lokasi baru.";
+            document.getElementById('navIcon').innerText = "⬆";
+            document.getElementById('navMainText').innerText = "Tujuan Dihapus";
+            document.getElementById('navSubText').innerText = "Ketuk peta untuk memilih lokasi baru";
+            document.getElementById('bannerNextStep').style.display = "none";
             log("Tujuan direset.");
         }
 
-        // 3. Auto Tracking GPS Presisi Tinggi
+        // 3. Auto Tracking GPS & Efek Garis Rute Habis (*Route Progress*)
         if ("geolocation" in navigator) {
             navigator.geolocation.watchPosition((pos) => {
                 const newLat = pos.coords.latitude;
@@ -238,16 +352,24 @@
                 if (!userMarker) {
                     userMarker = L.marker([currentLat, currentLon]).addTo(map).bindPopup("Posisi Anda").openPopup();
                     map.setView([currentLat, currentLon], 18);
-                    log("GPS Terkunci Akurat!");
+                    log("GPS Terkunci!");
                 } else {
                     userMarker.setLatLng([currentLat, currentLon]);
+                    if (isFollowingUser) {
+                        map.setView([currentLat, currentLon], map.getZoom(), { animate: true });
+                    }
                 }
 
-                // Auto-Rerouting otomatis jika bergeser > 15 meter dari jalur
+                // Update Pemotongan Garis Rute (Efek Google Maps: jalur yang sudah dilewati berubah/menipis)
+                if (isDestinationLocked && fullRouteCoordinates.length > 0) {
+                    updateRouteProgress(currentLat, currentLon);
+                }
+
+                // Auto-Rerouting otomatis jika menyimpang > 15 meter dari jalur
                 if (isDestinationLocked && targetLat && targetLon && distanceMoved > 15) {
                     const now = Date.now();
                     if (now - lastRerouteTime > REROUTE_COOLDOWN_MS) {
-                        log("Pergeseran posisi -> Menghitung ulang jalur alternatif...");
+                        log("Keluar jalur terdeteksi -> Mencari ulang rute terdekat...");
                         lastRerouteTime = now;
                         fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
                     }
@@ -255,7 +377,7 @@
 
             }, (err) => {
                 log("GPS Error: " + err.message);
-                isGpsReady = true; // Fallback agar tetap bisa jalan walau error
+                isGpsReady = true;
             }, {
                 enableHighAccuracy: true,
                 maximumAge: 0,
@@ -276,6 +398,37 @@
             return R * c;
         }
 
+        // Fungsi Memotong Garis Rute yang Sudah Dilewati
+        function updateRouteProgress(lat, lon) {
+            let closestIndex = 0;
+            let minDistance = Infinity;
+
+            // Cari titik terdekat pada poliline rute dengan posisi user saat ini
+            for (let i = 0; i < fullRouteCoordinates.length; i++) {
+                let d = calculateDistanceMeters(lat, lon, fullRouteCoordinates[i][0], fullRouteCoordinates[i][1]);
+                if (d < minDistance) {
+                    minDistance = d;
+                    closestIndex = i;
+                }
+            }
+
+            // Jika user sudah melewati sebagian besar rute, pecah koordinatnya
+            if (closestIndex > 0) {
+                let traveledPart = fullRouteCoordinates.slice(0, closestIndex + 1);
+                let remainingPart = fullRouteCoordinates.slice(closestIndex);
+
+                if (!traveledPolyline) {
+                    traveledPolyline = L.polyline(traveledPart, { color: '#9e9e9e', weight: 5, opacity: 0.6 }).addTo(map);
+                } else {
+                    traveledPolyline.setLatLngs(traveledPart);
+                }
+
+                if (routePolyline) {
+                    routePolyline.setLatLngs(remainingPart);
+                }
+            }
+        }
+
         // 4. Web Bluetooth Connection
         document.getElementById('btnConnect').addEventListener('click', async () => {
             if (bluetoothDevice && bluetoothDevice.gatt.connected) {
@@ -284,7 +437,7 @@
             }
 
             try {
-                log("Memindai perangkat BLE...");
+                log("Memindai BLE...");
                 bluetoothDevice = await navigator.bluetooth.requestDevice({
                     acceptAllDevices: true,
                     optionalServices: [SERVICE_UUID]
@@ -326,7 +479,7 @@
             log("Koneksi Bluetooth terputus.");
         }
 
-        // 5. Pencarian Lokasi Teks (Nominatim)
+        // 5. Pencarian Lokasi Teks
         async function searchLocation() {
             const q = document.getElementById('txtSearch').value;
             if (!q) return;
@@ -340,11 +493,12 @@
                     targetLat = parseFloat(data[0].lat);
                     targetLon = parseFloat(data[0].lon);
                     isDestinationLocked = true;
+                    isFollowingUser = true;
 
                     if (destinationMarker) map.removeLayer(destinationMarker);
                     destinationMarker = L.marker([targetLat, targetLon], { draggable: false }).addTo(map)
                         .bindPopup(data[0].display_name).openPopup();
-                    map.setView([targetLat, targetLon], 17);
+                    map.setView([targetLat, targetLon], 18);
 
                     document.getElementById('btnClearDest').style.display = "block";
                     fetchGraphHopperRoute(currentLat, currentLon, targetLat, targetLon);
@@ -356,51 +510,72 @@
             }
         }
 
-        // 6. GraphHopper API Routing (Menggunakan profile=bike yang kompatibel penuh)
+        // 6. GraphHopper API Routing & Parsel Instruksi Belok
         async function fetchGraphHopperRoute(startLat, startLon, endLat, endLon) {
-            // Menggunakan profile=bike agar stabil di semua tier akun GraphHopper
             const url = `https://graphhopper.com/api/1/route?point=${startLat},${startLon}&point=${endLat},${endLon}&profile=bike&instructions=true&locale=id&key=${GH_API_KEY}`;
 
             try {
-                log("Mengirim permintaan rute ke GraphHopper...");
+                log("Mengambil rute GraphHopper...");
                 const response = await fetch(url);
                 const data = await response.json();
-
-                if (data.message) {
-                    alert("GraphHopper Error: " + data.message);
-                    log("API Error: " + data.message);
-                    return;
-                }
 
                 if (data.paths && data.paths.length > 0) {
                     const path = data.paths[0];
                     const distanceMeters = Math.round(path.distance);
-                    const instructions = path.instructions[0] || { text: "Lanjutkan perjalanan", distance: distanceMeters };
 
-                    const streetName = instructions.street_name || "Jalan Lingkungan";
-                    const instructionText = instructions.text || "Ikuti jalur";
-                    const stepDist = Math.round(instructions.distance);
+                    const inst1 = path.instructions[0] || { text: "Lanjutkan perjalanan", distance: distanceMeters, sign: 0 };
+                    const streetName1 = inst1.street_name || "Jalan Lingkungan";
+                    const stepDist1 = Math.round(inst1.distance);
+                    const sign1 = inst1.sign;
 
-                    document.getElementById('lblNavInfo').innerHTML =
-                        `<strong>Navigasi:</strong> ${instructionText} (${stepDist}m)<br><strong>Jalan:</strong> ${streetName} (Total: ${distanceMeters}m)`;
+                    const inst2 = path.instructions[1];
 
-                    if (routePolyline) {
-                        map.removeLayer(routePolyline);
+                    let turnCode = "STRAIGHT";
+                    let iconSymbol = "⬆";
+                    let signText = "Lurus terus";
+
+                    if (sign1 === -2 || sign1 === -3) { turnCode = "LEFT"; iconSymbol = "⬅"; signText = "Belok Kiri"; }
+                    else if (sign1 === 2 || sign1 === 3) { turnCode = "RIGHT"; iconSymbol = "➡"; signText = "Belok Kanan"; }
+                    else if (sign1 === 1) { turnCode = "SLIGHT_RIGHT"; iconSymbol = "↗"; signText = "Sedikit Kanan"; }
+                    else if (sign1 === -1) { turnCode = "SLIGHT_LEFT"; iconSymbol = "↖"; signText = "Sedikit Kiri"; }
+                    else if (sign1 === 4) { turnCode = "DESTINATION"; iconSymbol = "🏁"; signText = "Tiba di Tujuan"; }
+
+                    // Update Banner Tampilan Atas
+                    document.getElementById('navIcon').innerText = iconSymbol;
+                    document.getElementById('navMainText').innerText = `${stepDist1} m · ke arah ${streetName1}`;
+                    document.getElementById('navSubText').innerText = `${signText}`;
+
+                    if (inst2) {
+                        let nextSign = inst2.sign;
+                        let nextIconSymbol = "➔";
+                        if (nextSign === -2 || nextSign === -3) nextIconSymbol = "⬅";
+                        else if (nextSign === 2 || nextSign === 3) nextIconSymbol = "➡";
+
+                        document.getElementById('nextIcon').innerText = nextIconSymbol;
+                        document.getElementById('nextText').innerText = inst2.text || "lanjutkan";
+                        document.getElementById('bannerNextStep').style.display = "flex";
+                    } else {
+                        document.getElementById('bannerNextStep').style.display = "none";
                     }
 
-                    const latLngs = decodePolyline(path.points);
-                    routePolyline = L.polyline(latLngs, { color: '#ff5722', weight: 6, opacity: 0.85 }).addTo(map);
+                    // Hapus rute lama
+                    if (routePolyline) map.removeLayer(routePolyline);
+                    if (traveledPolyline) map.removeLayer(traveledPolyline);
 
-                    const pts = latLngs.slice(0, 10).map((c) => {
+                    fullRouteCoordinates = decodePolyline(path.points);
+                    routePolyline = L.polyline(fullRouteCoordinates, { color: '#2979ff', weight: 7, opacity: 0.95 }).addTo(map);
+
+                    const pts = fullRouteCoordinates.slice(0, 10).map((c) => {
                         return [Math.round((c[1] - currentLon) * 10000), Math.round((c[0] - currentLat) * 10000)];
                     });
 
+                    // Kirim data ke ESP32-C3 via BLE
                     if (navChar && bluetoothDevice && bluetoothDevice.gatt.connected) {
                         const payload = {
                             speed: 35,
-                            turn: "STRAIGHT",
-                            dist: stepDist,
-                            street: streetName,
+                            turn: turnCode,
+                            dist: stepDist1,
+                            street: streetName1,
                             pts: pts
                         };
 
@@ -408,18 +583,17 @@
                         const bleData = new TextEncoder().encode(jsonString);
 
                         navChar.writeValueWithoutResponse(bleData).then(() => {
-                            log("Data rute berhasil dikirim ke ESP32!");
+                            log("Navigasi & Instruksi Belok Terkirim ke Stang!");
                         }).catch((err) => {
                             log("Gagal kirim BLE: " + err.message);
                         });
                     }
 
                 } else {
-                    alert("Rute tidak ditemukan oleh sistem.");
+                    alert("Rute tidak ditemukan.");
                 }
             } catch (error) {
                 log("Network Error: " + error.message);
-                alert("Gagal terhubung ke server GraphHopper.");
             }
         }
 
